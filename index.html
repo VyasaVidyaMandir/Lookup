@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Excel Data Lookup</title>
+    <!-- Tailwind CSS for modern, responsive styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- SheetJS (xlsx.js) for reading Excel files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        /* Custom styles for a better look and feel */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Style for disabled input */
+        input:disabled {
+            background-color: #f3f4f6; /* gray-100 */
+            cursor: not-allowed;
+        }
+        /* Simple transition for smoother UI changes */
+        .transition-all {
+            transition: all 0.3s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-4xl mx-auto bg-white rounded-2xl shadow-lg p-6 md:p-8 space-y-6">
+        
+        <!-- Header Section -->
+        <header class="text-center">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Data Lookup</h1>
+            <p class="text-gray-500 mt-2">Select a sheet and search for a record by Roll Number.</p>
+        </header>
+
+        <!-- Main Content Area -->
+        <main>
+            <!-- 1. Sheet Selection Section -->
+            <section id="sheet-selection-container" class="transition-all space-y-4">
+                 <div>
+                    <label for="sheet-selector" class="block text-lg font-semibold mb-2 text-gray-700">Choose a Sheet</label>
+                    <select id="sheet-selector" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+                        <!-- Options will be populated by JS -->
+                    </select>
+                </div>
+                <div id="file-info" class="mt-4 text-center text-sm h-5"></div>
+            </section>
+
+            <!-- 2. Search Section (Initially Hidden) -->
+            <section id="search-container" class="hidden transition-all space-y-4">
+                <div>
+                    <label for="search-input" class="block text-sm font-medium text-gray-700">Enter Roll Number</label>
+                    <input type="text" id="search-input" class="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500" placeholder="Type Roll Number here...">
+                </div>
+            </section>
+            
+            <!-- 3. Results Section -->
+            <section id="results-container" class="mt-6">
+                <!-- Search results will be dynamically inserted here -->
+            </section>
+        </main>
+    </div>
+
+    <script>
+        // --- GitHub API Configuration ---
+        const GITHUB_OWNER = 'VyasaVidyaMandir'; // Your GitHub username or organization name
+        const GITHUB_REPO = 'Lookup';           // The name of your repository
+        const FOLDER_PATH = 'Data';             // The folder where your Excel files are stored
+
+        // --- Global State ---
+        let sheetData = [];
+        let rollNoColumn = '';
+        let headers = [];
+
+        // --- DOM Element References ---
+        const sheetSelectionContainer = document.getElementById('sheet-selection-container');
+        const searchContainer = document.getElementById('search-container');
+        const resultsContainer = document.getElementById('results-container');
+        const sheetSelector = document.getElementById('sheet-selector');
+        const fileInfo = document.getElementById('file-info');
+        const searchInput = document.getElementById('search-input');
+
+        // --- Event Listeners ---
+        document.addEventListener('DOMContentLoaded', populateSheetSelectorFromGitHub);
+        sheetSelector.addEventListener('change', loadAndProcessSheet);
+        searchInput.addEventListener('input', performSearch);
+
+        // --- Core Functions ---
+
+        /**
+         * Fetches the list of files from the GitHub repository and populates the dropdown.
+         */
+        async function populateSheetSelectorFromGitHub() {
+            sheetSelector.innerHTML = '<option value="" selected disabled>Fetching sheets from GitHub...</option>';
+            const apiUrl = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/contents/${FOLDER_PATH}`;
+
+            try {
+                const response = await fetch(apiUrl);
+                if (!response.ok) {
+                    throw new Error(`GitHub API error: ${response.statusText}`);
+                }
+                const files = await response.json();
+
+                // Filter for valid spreadsheet files only
+                const spreadsheetFiles = files.filter(file => 
+                    file.type === 'file' && (file.name.endsWith('.xlsx') || file.name.endsWith('.xls') || file.name.endsWith('.csv'))
+                );
+
+                if (spreadsheetFiles.length === 0) {
+                    throw new Error(`No spreadsheet files found in the "${FOLDER_PATH}" folder.`);
+                }
+
+                sheetSelector.innerHTML = '<option value="" selected disabled>Select a file to begin...</option>';
+                spreadsheetFiles.forEach(file => {
+                    const option = document.createElement('option');
+                    option.value = file.name;
+                    option.textContent = file.name;
+                    sheetSelector.appendChild(option);
+                });
+
+            } catch (error) {
+                console.error("Failed to fetch files from GitHub:", error);
+                showError("Could not load file list from GitHub. Check repository settings.");
+                sheetSelector.innerHTML = '<option value="" selected disabled>Error loading files</option>';
+            }
+        }
+
+        /**
+         * Fetches and processes the selected Excel sheet from the "Data" folder.
+         */
+        async function loadAndProcessSheet() {
+            const fileName = sheetSelector.value;
+            if (!fileName) return;
+
+            // Reset UI for new selection
+            searchContainer.classList.add('hidden');
+            resultsContainer.innerHTML = '';
+            searchInput.value = '';
+            fileInfo.innerHTML = `<p class="text-blue-600 font-medium">Loading: ${fileName}...</p>`;
+
+            try {
+                const url = `${FOLDER_PATH}/${fileName}`;
+                const response = await fetch(url);
+
+                if (!response.ok) {
+                    throw new Error(`File not found. Make sure "${fileName}" is in the "${FOLDER_PATH}" folder.`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                const data = new Uint8Array(arrayBuffer);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                
+                sheetData = XLSX.utils.sheet_to_json(worksheet, { defval: "" });
+
+                if (sheetData.length === 0) {
+                    throw new Error("The selected sheet is empty or could not be read.");
+                }
+                
+                headers = Object.keys(sheetData[0]);
+                identifyRollNumberColumn(headers);
+
+            } catch (error) {
+                console.error("Error processing file:", error);
+                showError(error.message);
+                sheetData = []; // Clear data on error
+            }
+        }
+
+        /**
+         * Identifies the 'Roll Number' column from the sheet headers.
+         * @param {string[]} sheetHeaders - An array of column headers.
+         */
+        function identifyRollNumberColumn(sheetHeaders) {
+            // Regex to find roll number variations (case-insensitive)
+            const rollNoRegex = /roll\s*no|register\s*no|roll\s*number|register\s*number/i;
+            rollNoColumn = sheetHeaders.find(h => rollNoRegex.test(h.trim()));
+
+            if (rollNoColumn) {
+                fileInfo.innerHTML = `<p class="text-green-600 font-medium">Loaded successfully. Ready to search.</p>`;
+                searchContainer.classList.remove('hidden');
+                searchInput.focus();
+            } else {
+                throw new Error(`Could not find a 'Roll Number' column in "${sheetSelector.value}".`);
+            }
+        }
+
+        /**
+         * Performs the search based on user input for the Roll Number.
+         */
+        function performSearch() {
+            const query = searchInput.value.trim().toLowerCase();
+
+            if (query.length < 1) {
+                resultsContainer.innerHTML = '';
+                return;
+            }
+
+            const results = sheetData.filter(row => {
+                // Ensure the value exists and perform a case-insensitive comparison
+                const cellValue = row[rollNoColumn] ? String(row[rollNoColumn]).toLowerCase() : '';
+                return cellValue.includes(query);
+            });
+
+            displayResults(results);
+        }
+
+        /**
+         * Renders the search results in the results container.
+         * @param {object[]} results - An array of matching row objects.
+         */
+        function displayResults(results) {
+            resultsContainer.innerHTML = ''; // Clear previous results
+
+            if (results.length === 0) {
+                resultsContainer.innerHTML = '<p class="text-center text-gray-500 p-4">No results found.</p>';
+                return;
+            }
+            
+            // Since we search by a unique ID, we can display multiple cards if needed
+            const resultsWrapper = document.createElement('div');
+            resultsWrapper.className = 'space-y-4';
+            
+            results.forEach(row => {
+                const card = createResultCard(row);
+                resultsWrapper.appendChild(card);
+            });
+            
+            resultsContainer.appendChild(resultsWrapper);
+        }
+
+        /**
+         * Creates and returns an HTML element for a single result card.
+         * @param {object} row - The data object for a single row.
+         * @returns {HTMLElement} The card element.
+         */
+        function createResultCard(row) {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-50 border border-gray-200 rounded-lg p-4 md:p-6 shadow-sm animate-fade-in';
+
+            const titleText = row[rollNoColumn] ? `${rollNoColumn}: ${row[rollNoColumn]}` : 'Record Details';
+            const title = document.createElement('h3');
+            title.className = 'text-xl font-bold mb-4 text-gray-800 border-b pb-2';
+            title.textContent = titleText;
+            card.appendChild(title);
+
+            const grid = document.createElement('div');
+            grid.className = 'grid grid-cols-1 sm:grid-cols-2 gap-4';
+            
+            headers.forEach(header => {
+                // Don't repeat the roll number in the details if it's in the title
+                if (header === rollNoColumn) return;
+
+                const field = document.createElement('div');
+                field.className = 'flex flex-col';
+                const label = document.createElement('span');
+                label.className = 'text-sm font-medium text-gray-500';
+                label.textContent = header;
+                const value = document.createElement('span');
+                value.className = 'text-md text-gray-900 font-semibold';
+                value.textContent = row[header] || 'N/A';
+                
+                field.appendChild(label);
+                field.appendChild(value);
+                grid.appendChild(field);
+            });
+            
+            card.appendChild(grid);
+            return card;
+        }
+        
+        /**
+         * Displays an error message in the file info area.
+         * @param {string} message - The error message to display.
+         */
+        function showError(message) {
+            fileInfo.innerHTML = `<p class="text-red-600 font-medium">${message}</p>`;
+        }
+        
+        // Add a simple fade-in animation for the results card
+        const style = document.createElement('style');
+        style.innerHTML = `
+            @keyframes fade-in {
+                from { opacity: 0; transform: translateY(10px); }
+                to { opacity: 1; transform: translateY(0); }
+            }
+            .animate-fade-in {
+                animation: fade-in 0.5s ease-out forwards;
+            }
+        `;
+        document.head.appendChild(style);
+
+    </script>
+</body>
+</html>
